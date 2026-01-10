@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   Plus, Trash2, Check, X, Play, Edit3, Trophy, 
   AlertCircle, ArrowRight, BrainCircuit, Settings, 
-  Download, Upload 
+  Download, Upload, RotateCcw, PartyPopper 
 } from 'lucide-react';
 import './App.css';
 
@@ -65,7 +65,7 @@ export default function App() {
     localStorage.setItem('veriflash-data', JSON.stringify(columns));
   }, [columns]);
 
-  // --- File I/O (Local Drive Saves) ---
+  // --- File I/O ---
 
   const handleExport = () => {
     const dataStr = JSON.stringify(columns, null, 2);
@@ -102,7 +102,7 @@ export default function App() {
       }
     };
     reader.readAsText(file);
-    e.target.value = null; // Reset input
+    e.target.value = null; 
   };
 
   // --- CRUD Actions ---
@@ -227,7 +227,6 @@ export default function App() {
               onDeleteWord={deleteWord}
             />
             
-            {/* Local Drive Save Controls */}
             <div className="mt-12 pt-6 border-t border-slate-200">
               <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4">Local File Management</h3>
               <div className="flex gap-4">
@@ -324,23 +323,85 @@ function EditView({
 
 function TestView({ columns, onBack }) {
   const [currentCard, setCurrentCard] = useState(null);
-  const [gameState, setGameState] = useState('playing');
+  const [gameState, setGameState] = useState('playing'); // playing | feedback | finished
   const [result, setResult] = useState(null);
   const [stats, setStats] = useState({ correct: 0, total: 0, streak: 0 });
   const [shaking, setShaking] = useState(false);
+  
+  // New State for Weighted Algorithm
+  const [testDeck, setTestDeck] = useState([]);
+  const [completedCardIds, setCompletedCardIds] = useState(new Set());
+  const [isDeckReady, setIsDeckReady] = useState(false);
 
-  const validColumns = columns.filter(col => col.words.length > 0);
-
-  const generateCard = useCallback(() => {
-    if (validColumns.length === 0) return null;
-    const randomCol = validColumns[Math.floor(Math.random() * validColumns.length)];
-    const randomWord = randomCol.words[Math.floor(Math.random() * randomCol.words.length)];
-    return { word: randomWord, column: randomCol };
-  }, [validColumns]);
-
+  // 1. Initialize Deck with Weights
   useEffect(() => {
-    if (!currentCard) setCurrentCard(generateCard());
-  }, [generateCard, currentCard]);
+    const newDeck = [];
+    const validColumns = columns.filter(col => col.words.length > 0);
+    
+    if (validColumns.length === 0) {
+      setIsDeckReady(true);
+      return;
+    }
+
+    validColumns.forEach(col => {
+      const rightWords = col.words.filter(w => w.isRight);
+      const wrongWords = col.words.filter(w => !w.isRight);
+      
+      // Calculate weights to ensure 50/50 probability per category
+      // If a column has 1 Right and 4 Wrong:
+      // Right gets weight 1.0 (Total Right mass = 1)
+      // Wrong gets weight 0.25 (Total Wrong mass = 1)
+      const rightWeight = rightWords.length > 0 ? 1 / rightWords.length : 0;
+      const wrongWeight = wrongWords.length > 0 ? 1 / wrongWords.length : 0;
+
+      col.words.forEach(word => {
+        newDeck.push({
+          uniqueId: `${col.id}-${word.id}`, // Unique tracking ID
+          word: word,
+          column: col,
+          weight: word.isRight ? rightWeight : wrongWeight
+        });
+      });
+    });
+
+    setTestDeck(newDeck);
+    setIsDeckReady(true);
+  }, [columns]);
+
+  // 2. Generate Card using Weights & History
+  const generateCard = useCallback(() => {
+    if (!isDeckReady || testDeck.length === 0) return null;
+
+    // Filter out completed cards
+    const availableCards = testDeck.filter(card => !completedCardIds.has(card.uniqueId));
+    
+    if (availableCards.length === 0) return 'finished';
+
+    // Weighted Random Selection (Python random.choices equivalent)
+    const totalWeight = availableCards.reduce((sum, card) => sum + card.weight, 0);
+    let randomThreshold = Math.random() * totalWeight;
+
+    for (const card of availableCards) {
+      if (randomThreshold < card.weight) {
+        return card;
+      }
+      randomThreshold -= card.weight;
+    }
+    
+    return availableCards[availableCards.length - 1]; // Fallback for floating point errors
+  }, [isDeckReady, testDeck, completedCardIds]);
+
+  // Trigger first card load
+  useEffect(() => {
+    if (isDeckReady && !currentCard) {
+      const card = generateCard();
+      if (card === 'finished') {
+        setGameState('finished');
+      } else {
+        setCurrentCard(card);
+      }
+    }
+  }, [isDeckReady, generateCard, currentCard]);
 
   const handleGuess = (userGuessedRight) => {
     if (gameState !== 'playing' || !currentCard) return;
@@ -360,22 +421,105 @@ function TestView({ columns, onBack }) {
   };
 
   const nextCard = () => {
+    // Add current to completed list
+    if (currentCard) {
+      setCompletedCardIds(prev => new Set(prev).add(currentCard.uniqueId));
+    }
+
     setResult(null);
     setGameState('playing');
-    setCurrentCard(generateCard());
+    
+    // Generate next
+    // Note: We need to use the functional update or updated set for immediate generation
+    // But since generateCard relies on state, we rely on the next render cycle 
+    // effectively by setting currentCard to null momentarily or calling generator with updated ignore list logic.
+    // However, simplest React pattern here is:
+    const newCompleted = new Set(completedCardIds);
+    newCompleted.add(currentCard.uniqueId);
+    
+    // Use local Logic for immediate update to avoid flicker or wait
+    const availableCards = testDeck.filter(card => !newCompleted.has(card.uniqueId));
+    
+    if (availableCards.length === 0) {
+      setGameState('finished');
+      setCurrentCard(null);
+      return;
+    }
+
+    // Logic repeated here for immediate next card without useEffect lag
+    const totalWeight = availableCards.reduce((sum, card) => sum + card.weight, 0);
+    let randomThreshold = Math.random() * totalWeight;
+    let next = availableCards[availableCards.length - 1];
+
+    for (const card of availableCards) {
+      if (randomThreshold < card.weight) {
+        next = card;
+        break;
+      }
+      randomThreshold -= card.weight;
+    }
+
+    setCurrentCard(next);
   };
 
-  if (validColumns.length === 0) {
+  const restart = () => {
+    setCompletedCardIds(new Set());
+    setStats({ correct: 0, total: 0, streak: 0 });
+    setGameState('playing');
+    setCurrentCard(null); 
+    // This will trigger the useEffect to load the first card again
+  };
+
+  // --- Render States ---
+
+  if (!isDeckReady) return <div className="p-12 text-center text-slate-500">Preparing Deck...</div>;
+
+  if (testDeck.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] text-center space-y-4">
         <AlertCircle size={48} className="text-amber-500" />
         <h2 className="text-2xl font-bold">Not enough data</h2>
+        <p className="text-slate-500">Add categories and words in the Editor to start.</p>
         <Button onClick={onBack} variant="secondary">Back to Editor</Button>
       </div>
     );
   }
 
-  if (!currentCard) return <div className="p-12 text-center">Loading...</div>;
+  if (gameState === 'finished') {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center space-y-6 animate-fade-in">
+        <div className="bg-emerald-100 p-6 rounded-full text-emerald-600 mb-2">
+          <PartyPopper size={64} />
+        </div>
+        <div>
+          <h2 className="text-3xl font-black text-slate-800">Session Complete!</h2>
+          <p className="text-slate-500 mt-2">You have reviewed all available cards.</p>
+        </div>
+        
+        <div className="grid grid-cols-2 gap-4 w-full max-w-xs bg-slate-50 p-4 rounded-xl border border-slate-200">
+          <div className="text-center">
+            <div className="text-xs font-bold text-slate-400 uppercase">Score</div>
+            <div className="text-2xl font-black text-slate-800">{Math.round((stats.correct / stats.total) * 100) || 0}%</div>
+          </div>
+          <div className="text-center">
+            <div className="text-xs font-bold text-slate-400 uppercase">Streak</div>
+            <div className="text-2xl font-black text-orange-500">{stats.streak}</div>
+          </div>
+        </div>
+
+        <div className="flex gap-3">
+          <Button onClick={restart} variant="primary">
+            <RotateCcw size={18} /> Start Over
+          </Button>
+          <Button onClick={onBack} variant="secondary">
+            Back to Editor
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!currentCard) return <div className="p-12 text-center text-slate-500">Loading Card...</div>;
 
   return (
     <div className="max-w-xl mx-auto py-8">
@@ -431,10 +575,8 @@ function TestView({ columns, onBack }) {
         </div>
       </div>
       
-      <div className="mt-8 text-center">
-        <button onClick={onBack} className="text-slate-400 hover:text-slate-600 text-sm font-medium flex items-center justify-center gap-2 mx-auto">
-          <Settings size={14} /> Adjust Settings
-        </button>
+      <div className="mt-8 text-center text-slate-400 text-sm">
+        Cards remaining: {testDeck.length - completedCardIds.size} / {testDeck.length}
       </div>
     </div>
   );
