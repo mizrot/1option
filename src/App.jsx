@@ -351,15 +351,14 @@ function TestView({ columns, onBack }) {
       // If a column has 1 Right and 4 Wrong:
       // Right gets weight 1.0 (Total Right mass = 1)
       // Wrong gets weight 0.25 (Total Wrong mass = 1)
-      const rightWeight = rightWords.length > 0 ? 1 / rightWords.length : 0;
-      const wrongWeight = wrongWords.length > 0 ? 1 / wrongWords.length : 0;
+      const weight = col.words.length > 0 ? 1 / col.words.length : 0;
 
       col.words.forEach(word => {
         newDeck.push({
           uniqueId: `${col.id}-${word.id}`, // Unique tracking ID
           word: word,
           column: col,
-          weight: word.isRight ? rightWeight : wrongWeight
+          weight: weight
         });
       });
     });
