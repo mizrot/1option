@@ -421,20 +421,31 @@ function TestView({ columns, onBack }) {
 
   const nextCard = () => {
     // Add current to completed list
-    if (currentCard) {
-      setCompletedCardIds(prev => new Set(prev).add(currentCard.uniqueId));
-    }
 
-    setResult(null);
-    setGameState('playing');
-    
     // Generate next
     // Note: We need to use the functional update or updated set for immediate generation
     // But since generateCard relies on state, we rely on the next render cycle 
     // effectively by setting currentCard to null momentarily or calling generator with updated ignore list logic.
     // However, simplest React pattern here is:
     const newCompleted = new Set(completedCardIds);
-    newCompleted.add(currentCard.uniqueId);
+    if (currentCard.word.isRight) {
+	if (result == 'correct'){
+    const colIdToCancel = currentCard.column.id;
+      // Loop through the whole deck and mark every card from this column as completed
+      testDeck.forEach(card => {
+        if (card.column.id === colIdToCancel) {
+          newCompleted.add(card.uniqueId);
+        }
+      });
+	}
+    } else {
+      // Just mark this specific card as done
+      newCompleted.add(currentCard.uniqueId);
+    }
+    
+    setCompletedCardIds(newCompleted);
+    setResult(null);
+    setGameState('playing');
     
     // Use local Logic for immediate update to avoid flicker or wait
     const availableCards = testDeck.filter(card => !newCompleted.has(card.uniqueId));
