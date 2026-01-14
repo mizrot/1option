@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   Plus, Trash2, Check, X, Play, Edit3, Trophy, 
   AlertCircle, ArrowRight, BrainCircuit, Settings, 
-  Download, Upload, RotateCcw, PartyPopper 
+  Download, Upload, RotateCcw, PartyPopper, Keyboard, Lightbulb 
 } from 'lucide-react';
 import './App.css';
 
@@ -58,6 +58,7 @@ export default function App() {
     const saved = localStorage.getItem('veriflash-data');
     return saved ? JSON.parse(saved) : DEFAULT_DATA;
   });
+  // Modes: 'edit' | 'test' | 'recall'
   const [mode, setMode] = useState('edit');
   const fileInputRef = useRef(null);
 
@@ -208,13 +209,23 @@ export default function App() {
             >
               <span className="flex items-center gap-2"><Play size={16}/> Test</span>
             </button>
+            <button
+              onClick={() => setMode('recall')}
+              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                mode === 'recall' 
+                  ? 'bg-white text-purple-600 shadow-sm' 
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              <span className="flex items-center gap-2"><Keyboard size={16}/> Recall</span>
+            </button>
           </div>
         </div>
       </header>
 
       {/* Main Content */}
       <main className="max-w-6xl mx-auto p-4 md:p-6">
-        {mode === 'edit' ? (
+        {mode === 'edit' && (
           <>
             <EditView 
               columns={columns} 
@@ -246,8 +257,14 @@ export default function App() {
               </div>
             </div>
           </>
-        ) : (
+        )}
+        
+        {mode === 'test' && (
           <TestView columns={columns} onBack={() => setMode('edit')} />
+        )}
+
+        {mode === 'recall' && (
+           <RecallView columns={columns} onBack={() => setMode('edit')} />
         )}
       </main>
     </div>
@@ -344,18 +361,11 @@ function TestView({ columns, onBack }) {
     }
 
     validColumns.forEach(col => {
-      const rightWords = col.words.filter(w => w.isRight);
-      const wrongWords = col.words.filter(w => !w.isRight);
-      
-      // Calculate weights to ensure 50/50 probability per category
-      // If a column has 1 Right and 4 Wrong:
-      // Right gets weight 1.0 (Total Right mass = 1)
-      // Wrong gets weight 0.25 (Total Wrong mass = 1)
+      // Calculate weights (1.0 for rights, scaled for wrongs)
       const weight = col.words.length > 0 ? 1 / col.words.length : 0;
-
       col.words.forEach(word => {
         newDeck.push({
-          uniqueId: `${col.id}-${word.id}`, // Unique tracking ID
+          uniqueId: `${col.id}-${word.id}`,
           word: word,
           column: col,
           weight: weight
@@ -370,35 +380,25 @@ function TestView({ columns, onBack }) {
   // 2. Generate Card using Weights & History
   const generateCard = useCallback(() => {
     if (!isDeckReady || testDeck.length === 0) return null;
-
-    // Filter out completed cards
     const availableCards = testDeck.filter(card => !completedCardIds.has(card.uniqueId));
-    
     if (availableCards.length === 0) return 'finished';
 
-    // Weighted Random Selection (Python random.choices equivalent)
     const totalWeight = availableCards.reduce((sum, card) => sum + card.weight, 0);
     let randomThreshold = Math.random() * totalWeight;
 
     for (const card of availableCards) {
-      if (randomThreshold < card.weight) {
-        return card;
-      }
+      if (randomThreshold < card.weight) return card;
       randomThreshold -= card.weight;
     }
-    
-    return availableCards[availableCards.length - 1]; // Fallback for floating point errors
+    return availableCards[availableCards.length - 1];
   }, [isDeckReady, testDeck, completedCardIds]);
 
   // Trigger first card load
   useEffect(() => {
     if (isDeckReady && !currentCard) {
       const card = generateCard();
-      if (card === 'finished') {
-        setGameState('finished');
-      } else {
-        setCurrentCard(card);
-      }
+      if (card === 'finished') setGameState('finished');
+      else setCurrentCard(card);
     }
   }, [isDeckReady, generateCard, currentCard]);
 
@@ -420,34 +420,27 @@ function TestView({ columns, onBack }) {
   };
 
   const nextCard = () => {
-    // Add current to completed list
-
-    // Generate next
-    // Note: We need to use the functional update or updated set for immediate generation
-    // But since generateCard relies on state, we rely on the next render cycle 
-    // effectively by setting currentCard to null momentarily or calling generator with updated ignore list logic.
-    // However, simplest React pattern here is:
     const newCompleted = new Set(completedCardIds);
-    if (currentCard.word.isRight) {
-	if (result == 'correct'){
-    const colIdToCancel = currentCard.column.id;
-      // Loop through the whole deck and mark every card from this column as completed
-      testDeck.forEach(card => {
-        if (card.column.id === colIdToCancel) {
-          newCompleted.add(card.uniqueId);
-        }
-      });
-	}
-    } else {
-      // Just mark this specific card as done
-      newCompleted.add(currentCard.uniqueId);
-    }
     
+    // Logic: If user guessed CORRECTLY...
+    if (result === 'correct') {
+      if (currentCard.word.isRight) {
+         // If it was a Right Answer, remove all cards from this column
+         const colIdToCancel = currentCard.column.id;
+         testDeck.forEach(card => {
+           if (card.column.id === colIdToCancel) newCompleted.add(card.uniqueId);
+         });
+      } else {
+         // If it was a Wrong Answer (distractor), only remove this specific card
+         newCompleted.add(currentCard.uniqueId);
+      }
+    }
+    // If guessed INCORRECTLY, do NOT add to completed (so it repeats)
+
     setCompletedCardIds(newCompleted);
     setResult(null);
     setGameState('playing');
     
-    // Use local Logic for immediate update to avoid flicker or wait
     const availableCards = testDeck.filter(card => !newCompleted.has(card.uniqueId));
     
     if (availableCards.length === 0) {
@@ -456,7 +449,6 @@ function TestView({ columns, onBack }) {
       return;
     }
 
-    // Logic repeated here for immediate next card without useEffect lag
     const totalWeight = availableCards.reduce((sum, card) => sum + card.weight, 0);
     let randomThreshold = Math.random() * totalWeight;
     let next = availableCards[availableCards.length - 1];
@@ -468,7 +460,6 @@ function TestView({ columns, onBack }) {
       }
       randomThreshold -= card.weight;
     }
-
     setCurrentCard(next);
   };
 
@@ -477,35 +468,25 @@ function TestView({ columns, onBack }) {
     setStats({ correct: 0, total: 0, streak: 0 });
     setGameState('playing');
     setCurrentCard(null); 
-    // This will trigger the useEffect to load the first card again
   };
 
-  // --- Render States ---
-
   if (!isDeckReady) return <div className="p-12 text-center text-slate-500">Preparing Deck...</div>;
-
-  if (testDeck.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center space-y-4">
-        <AlertCircle size={48} className="text-amber-500" />
-        <h2 className="text-2xl font-bold">Not enough data</h2>
-        <p className="text-slate-500">Add categories and words in the Editor to start.</p>
-        <Button onClick={onBack} variant="secondary">Back to Editor</Button>
-      </div>
-    );
-  }
+  if (testDeck.length === 0) return (
+    <div className="flex flex-col items-center justify-center min-h-[60vh] text-center space-y-4">
+      <AlertCircle size={48} className="text-amber-500" />
+      <h2 className="text-2xl font-bold">Not enough data</h2>
+      <Button onClick={onBack} variant="secondary">Back to Editor</Button>
+    </div>
+  );
 
   if (gameState === 'finished') {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] text-center space-y-6 animate-fade-in">
-        <div className="bg-emerald-100 p-6 rounded-full text-emerald-600 mb-2">
-          <PartyPopper size={64} />
-        </div>
+        <div className="bg-emerald-100 p-6 rounded-full text-emerald-600 mb-2"><PartyPopper size={64} /></div>
         <div>
           <h2 className="text-3xl font-black text-slate-800">Session Complete!</h2>
           <p className="text-slate-500 mt-2">You have reviewed all available cards.</p>
         </div>
-        
         <div className="grid grid-cols-2 gap-4 w-full max-w-xs bg-slate-50 p-4 rounded-xl border border-slate-200">
           <div className="text-center">
             <div className="text-xs font-bold text-slate-400 uppercase">Score</div>
@@ -516,14 +497,9 @@ function TestView({ columns, onBack }) {
             <div className="text-2xl font-black text-orange-500">{stats.streak}</div>
           </div>
         </div>
-
         <div className="flex gap-3">
-          <Button onClick={restart} variant="primary">
-            <RotateCcw size={18} /> Start Over
-          </Button>
-          <Button onClick={onBack} variant="secondary">
-            Back to Editor
-          </Button>
+          <Button onClick={restart} variant="primary"><RotateCcw size={18} /> Start Over</Button>
+          <Button onClick={onBack} variant="secondary">Back to Editor</Button>
         </div>
       </div>
     );
@@ -588,6 +564,154 @@ function TestView({ columns, onBack }) {
       <div className="mt-8 text-center text-slate-400 text-sm">
         Cards remaining: {testDeck.length - completedCardIds.size} / {testDeck.length}
       </div>
+    </div>
+  );
+}
+
+// --- NEW COMPONENT: RecallView ---
+
+function RecallView({ columns, onBack }) {
+  const [selectedColId, setSelectedColId] = useState(null);
+  
+  // 1. Selection Screen
+  if (!selectedColId) {
+    const validColumns = columns.filter(c => c.words.some(w => w.isRight));
+    
+    return (
+      <div className="space-y-6">
+         <div className="flex items-center gap-4">
+           <Button onClick={onBack} variant="secondary">Back</Button>
+           <h2 className="text-2xl font-bold text-slate-800">Choose a Category</h2>
+         </div>
+         
+         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+           {validColumns.length === 0 ? (
+             <div className="col-span-full text-center p-12 text-slate-500">
+               No categories with correct answers found. Add some in the Editor!
+             </div>
+           ) : (
+             validColumns.map(col => (
+               <button 
+                key={col.id}
+                onClick={() => setSelectedColId(col.id)}
+                className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 hover:shadow-md hover:border-purple-200 hover:ring-2 hover:ring-purple-100 transition-all text-left group"
+               >
+                 <h3 className="font-bold text-lg text-slate-800 group-hover:text-purple-700 mb-2">{col.title}</h3>
+                 <div className="text-sm text-slate-400">
+                    {col.words.filter(w => w.isRight).length} words to find
+                 </div>
+               </button>
+             ))
+           )}
+         </div>
+      </div>
+    );
+  }
+
+  // 2. Game Screen logic
+  return <RecallGame column={columns.find(c => c.id === selectedColId)} onBack={() => setSelectedColId(null)} />;
+}
+
+function RecallGame({ column, onBack }) {
+  const [input, setInput] = useState('');
+  const [foundIds, setFoundIds] = useState(new Set());
+  const [isGhostText, setIsGhostText] = useState(false); // Track if current input is a suggestion
+  
+  const allRightWords = column.words.filter(w => w.isRight);
+  const total = allRightWords.length;
+  const foundCount = foundIds.size;
+  const isFinished = foundCount === total;
+
+  // Auto-check on typing
+  const handleChange = (e) => {
+    const val = e.target.value;
+    setInput(val);
+    if (isGhostText) setIsGhostText(false); // Clear ghost status if user types
+
+    // Check against all right words (case insensitive)
+    // Only check if we haven't found it yet
+    const normalizedVal = val.toLowerCase().trim();
+    const match = allRightWords.find(w => 
+      w.text.toLowerCase() === normalizedVal && !foundIds.has(w.id)
+    );
+
+    if (match) {
+      setFoundIds(prev => new Set(prev).add(match.id));
+      setInput(''); // Clear input on success
+      setIsGhostText(false);
+    }
+  };
+
+  const handleSuggestion = () => {
+    const remaining = column.words.filter(w => !foundIds.has(w.id) && !w.isRight);
+    if (remaining.length > 0) {
+      const randomWord = remaining[Math.floor(Math.random() * remaining.length)];
+      setInput(randomWord.text);
+      setIsGhostText(true); // Flag to style it differently
+    }
+  };
+
+  return (
+    <div className="max-w-xl mx-auto py-8">
+      {/* Header Stats */}
+      <div className="flex items-center justify-between mb-8 bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
+        <Button onClick={onBack} variant="secondary" className="px-3">
+             <ArrowRight size={18} className="rotate-180"/>
+        </Button>
+        <div className="text-center">
+            <div className="text-xs text-slate-500 font-bold uppercase tracking-wider">{column.title}</div>
+            <div className="text-xl font-black text-slate-800">{foundCount} / {total} Found</div>
+        </div>
+        <div className="w-10"></div> {/* Spacer for center alignment */}
+      </div>
+
+      {/* Found Words List (Pushes Upwards) */}
+      <div className="min-h-[200px] mb-8 flex flex-wrap content-start gap-3 p-6 bg-slate-50/50 rounded-3xl border-2 border-dashed border-slate-200">
+         {allRightWords.filter(w => foundIds.has(w.id)).map(word => (
+           <span key={word.id} className="animate-fade-in bg-purple-100 text-purple-700 px-4 py-2 rounded-full font-bold shadow-sm border border-purple-200 flex items-center gap-2">
+             <Check size={14} strokeWidth={3}/> {word.text}
+           </span>
+         ))}
+         {foundCount === 0 && (
+           <div className="w-full text-center text-slate-400 italic mt-8">
+             Type correct answers below...
+           </div>
+         )}
+         {isFinished && (
+            <div className="w-full flex flex-col items-center justify-center mt-4 animate-fade-in">
+               <div className="bg-emerald-100 p-4 rounded-full text-emerald-600 mb-2">
+                 <PartyPopper size={32}/>
+               </div>
+               <div className="text-emerald-600 font-bold">Category Complete!</div>
+            </div>
+         )}
+      </div>
+
+      {/* Input Area */}
+      {!isFinished && (
+        <div className="relative">
+          <input
+            autoFocus
+            value={input}
+            onChange={handleChange}
+            placeholder="Type a word..."
+            className={`w-full text-center text-2xl font-bold py-4 px-12 rounded-2xl border-2 shadow-sm focus:outline-none transition-all ${
+              isGhostText 
+                ? 'text-slate-400 bg-slate-50 border-slate-200' // Ghost style
+                : 'text-slate-800 bg-white border-slate-200 focus:border-purple-500 focus:ring-4 focus:ring-purple-500/10'
+            }`}
+          />
+          
+          {/* Suggestion Button inside input */}
+          <button 
+            onClick={handleSuggestion}
+            className="absolute right-3 top-1/2 -translate-y-1/2 p-2 text-slate-400 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
+            title="Get a hint"
+          >
+            <Lightbulb size={24} />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
