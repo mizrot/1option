@@ -572,14 +572,43 @@ function TestView({ columns, onBack }) {
 
 function RecallView({ columns, onBack }) {
   const [selectedColId, setSelectedColId] = useState(null);
-  // NEW: Lifted state to track found words across the session
   const [sessionFoundIds, setSessionFoundIds] = useState(new Set());
+  
+  // --- Global Search State (Moved Here) ---
+  const [globalInput, setGlobalInput] = useState('');
+  const [feedback, setFeedback] = useState('');
 
   const handleWordFound = (wordId) => {
     setSessionFoundIds(prev => new Set(prev).add(wordId));
   };
-  
-  // 1. Selection Screen
+
+  // --- Global Search Logic ---
+  const handleGlobalChange = (e) => {
+    const val = e.target.value;
+    setGlobalInput(val);
+    const normalizedVal = val.toLowerCase().trim();
+    
+    if (!normalizedVal) return;
+
+    // Search ALL columns
+    for (const col of columns) {
+      const match = col.words.find(w => 
+        w.isRight && 
+        w.text.toLowerCase() === normalizedVal && 
+        !sessionFoundIds.has(w.id)
+      );
+
+      if (match) {
+        handleWordFound(match.id);
+        setGlobalInput('');
+        setFeedback(`Global find: "${match.text}" in "${col.title}"!`);
+        setTimeout(() => setFeedback(''), 3000);
+        return;
+      }
+    }
+  };
+
+  // 1. Selection Screen (Main View)
   if (!selectedColId) {
     const validColumns = columns.filter(c => c.words.some(w => w.isRight));
     
@@ -626,6 +655,24 @@ function RecallView({ columns, onBack }) {
              })
            )}
          </div>
+
+         {/* --- Global Guess Input (Moved Here) --- */}
+         <div className="mt-8 pt-6 border-t border-slate-200">
+            <div className="flex items-center gap-2 text-sm font-bold text-slate-400 uppercase mb-2">
+              <Globe size={16} /> Global Guess
+            </div>
+            <input 
+              value={globalInput}
+              onChange={handleGlobalChange}
+              placeholder="Guess a word from ANY category..."
+              className="w-full text-center text-lg py-3 px-6 rounded-xl border border-slate-200 bg-white focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-400/10 transition-all placeholder:text-slate-400 shadow-sm"
+            />
+            {feedback && (
+              <div className="mt-2 text-center text-emerald-600 font-bold animate-fade-in bg-emerald-50 py-2 rounded-lg border border-emerald-100">
+                {feedback}
+              </div>
+            )}
+         </div>
       </div>
     );
   }
@@ -634,7 +681,6 @@ function RecallView({ columns, onBack }) {
   return (
     <RecallGame 
       column={columns.find(c => c.id === selectedColId)} 
-      allColumns={columns}
       foundIds={sessionFoundIds}
       onWordFound={handleWordFound}
       onBack={() => setSelectedColId(null)} 
@@ -642,10 +688,8 @@ function RecallView({ columns, onBack }) {
   );
 }
 
-function RecallGame({ column, allColumns, foundIds, onWordFound, onBack }) {
+function RecallGame({ column, foundIds, onWordFound, onBack }) {
   const [input, setInput] = useState('');
-  const [globalInput, setGlobalInput] = useState(''); // New State for global guess
-  const [feedback, setFeedback] = useState('');       // Feedback message
   const [isGhostText, setIsGhostText] = useState(false); 
   
   const allRightWords = column.words.filter(w => w.isRight);
@@ -670,32 +714,6 @@ function RecallGame({ column, allColumns, foundIds, onWordFound, onBack }) {
       onWordFound(match.id); 
       setInput(''); 
       setIsGhostText(false);
-    }
-  };
-
-  // Auto-check on typing (Global Input)
-  const handleGlobalChange = (e) => {
-    const val = e.target.value;
-    setGlobalInput(val);
-    const normalizedVal = val.toLowerCase().trim();
-    
-    if (!normalizedVal) return;
-
-    // Search ALL columns
-    for (const col of allColumns) {
-      const match = col.words.find(w => 
-        w.isRight && 
-        w.text.toLowerCase() === normalizedVal && 
-        !foundIds.has(w.id)
-      );
-
-      if (match) {
-        onWordFound(match.id);
-        setGlobalInput('');
-        setFeedback(`Global find: "${match.text}" in "${col.title}"!`);
-        setTimeout(() => setFeedback(''), 3000);
-        return;
-      }
     }
   };
 
@@ -769,24 +787,6 @@ function RecallGame({ column, allColumns, foundIds, onWordFound, onBack }) {
           </button>
         </div>
       )}
-
-      {/* Global Guess Input */}
-      <div className="mt-8 pt-6 border-t border-slate-100">
-         <div className="flex items-center gap-2 text-sm font-bold text-slate-400 uppercase mb-2">
-           <Globe size={16} /> Global Guess
-         </div>
-         <input 
-           value={globalInput}
-           onChange={handleGlobalChange}
-           placeholder="Guess a word from ANY category..."
-           className="w-full text-center text-lg py-3 px-6 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-400/10 transition-all placeholder:text-slate-400"
-         />
-         {feedback && (
-           <div className="mt-2 text-center text-emerald-600 font-bold animate-fade-in bg-emerald-50 py-2 rounded-lg border border-emerald-100">
-             {feedback}
-           </div>
-         )}
-      </div>
     </div>
   );
 }
