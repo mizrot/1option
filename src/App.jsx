@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   Plus, Trash2, Check, X, Play, Edit3, Trophy, 
   AlertCircle, ArrowRight, BrainCircuit, Settings, 
-  Download, Upload, RotateCcw, PartyPopper, Keyboard, Lightbulb 
+  Download, Upload, RotateCcw, PartyPopper, Keyboard, Lightbulb, Globe 
 } from 'lucide-react';
 import './App.css';
 
@@ -572,6 +572,12 @@ function TestView({ columns, onBack }) {
 
 function RecallView({ columns, onBack }) {
   const [selectedColId, setSelectedColId] = useState(null);
+  // NEW: Lifted state to track found words across the session
+  const [sessionFoundIds, setSessionFoundIds] = useState(new Set());
+
+  const handleWordFound = (wordId) => {
+    setSessionFoundIds(prev => new Set(prev).add(wordId));
+  };
   
   // 1. Selection Screen
   if (!selectedColId) {
@@ -590,18 +596,34 @@ function RecallView({ columns, onBack }) {
                No categories with correct answers found. Add some in the Editor!
              </div>
            ) : (
-             validColumns.map(col => (
-               <button 
-                key={col.id}
-                onClick={() => setSelectedColId(col.id)}
-                className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 hover:shadow-md hover:border-purple-200 hover:ring-2 hover:ring-purple-100 transition-all text-left group"
-               >
-                 <h3 className="font-bold text-lg text-slate-800 group-hover:text-purple-700 mb-2">{col.title}</h3>
-                 <div className="text-sm text-slate-400">
-                    {col.words.filter(w => w.isRight).length} words to find
-                 </div>
-               </button>
-             ))
+             validColumns.map(col => {
+               // Calculate progress for this column
+               const total = col.words.filter(w => w.isRight).length;
+               const found = col.words.filter(w => w.isRight && sessionFoundIds.has(w.id)).length;
+               
+               return (
+                 <button 
+                  key={col.id}
+                  onClick={() => setSelectedColId(col.id)}
+                  className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 hover:shadow-md hover:border-purple-200 hover:ring-2 hover:ring-purple-100 transition-all text-left group"
+                 >
+                   <div className="flex justify-between items-start mb-2">
+                     <h3 className="font-bold text-lg text-slate-800 group-hover:text-purple-700">{col.title}</h3>
+                     {found === total && found > 0 && <span className="text-xs bg-emerald-100 text-emerald-700 font-bold px-2 py-1 rounded-full">DONE</span>}
+                   </div>
+                   <div className="text-sm text-slate-400">
+                      {found} / {total} Found
+                   </div>
+                   {/* Progress bar */}
+                   <div className="mt-3 h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                     <div 
+                        className="h-full bg-purple-500 transition-all duration-500" 
+                        style={{ width: `${(found / total) * 100}%` }} 
+                     />
+                   </div>
+                 </button>
+               );
+             })
            )}
          </div>
       </div>
@@ -609,45 +631,81 @@ function RecallView({ columns, onBack }) {
   }
 
   // 2. Game Screen logic
-  return <RecallGame column={columns.find(c => c.id === selectedColId)} onBack={() => setSelectedColId(null)} />;
+  return (
+    <RecallGame 
+      column={columns.find(c => c.id === selectedColId)} 
+      allColumns={columns}
+      foundIds={sessionFoundIds}
+      onWordFound={handleWordFound}
+      onBack={() => setSelectedColId(null)} 
+    />
+  );
 }
 
-function RecallGame({ column, onBack }) {
+function RecallGame({ column, allColumns, foundIds, onWordFound, onBack }) {
   const [input, setInput] = useState('');
-  const [foundIds, setFoundIds] = useState(new Set());
-  const [isGhostText, setIsGhostText] = useState(false); // Track if current input is a suggestion
+  const [globalInput, setGlobalInput] = useState(''); // New State for global guess
+  const [feedback, setFeedback] = useState('');       // Feedback message
+  const [isGhostText, setIsGhostText] = useState(false); 
   
   const allRightWords = column.words.filter(w => w.isRight);
   const total = allRightWords.length;
-  const foundCount = foundIds.size;
+  // Calculate found count specifically for this column
+  const columnFoundWords = allRightWords.filter(w => foundIds.has(w.id));
+  const foundCount = columnFoundWords.length;
   const isFinished = foundCount === total;
 
-  // Auto-check on typing
+  // Auto-check on typing (Main Input)
   const handleChange = (e) => {
     const val = e.target.value;
     setInput(val);
-    if (isGhostText) setIsGhostText(false); // Clear ghost status if user types
+    if (isGhostText) setIsGhostText(false); 
 
-    // Check against all right words (case insensitive)
-    // Only check if we haven't found it yet
     const normalizedVal = val.toLowerCase().trim();
     const match = allRightWords.find(w => 
       w.text.toLowerCase() === normalizedVal && !foundIds.has(w.id)
     );
 
     if (match) {
-      setFoundIds(prev => new Set(prev).add(match.id));
-      setInput(''); // Clear input on success
+      onWordFound(match.id); 
+      setInput(''); 
       setIsGhostText(false);
     }
   };
 
+  // Auto-check on typing (Global Input)
+  const handleGlobalChange = (e) => {
+    const val = e.target.value;
+    setGlobalInput(val);
+    const normalizedVal = val.toLowerCase().trim();
+    
+    if (!normalizedVal) return;
+
+    // Search ALL columns
+    for (const col of allColumns) {
+      const match = col.words.find(w => 
+        w.isRight && 
+        w.text.toLowerCase() === normalizedVal && 
+        !foundIds.has(w.id)
+      );
+
+      if (match) {
+        onWordFound(match.id);
+        setGlobalInput('');
+        setFeedback(`Global find: "${match.text}" in "${col.title}"!`);
+        setTimeout(() => setFeedback(''), 3000);
+        return;
+      }
+    }
+  };
+
   const handleSuggestion = () => {
+    // Only suggest words that are Right and NOT yet found
     const remaining = column.words.filter(w => !foundIds.has(w.id) && !w.isRight);
     if (remaining.length > 0) {
       const randomWord = remaining[Math.floor(Math.random() * remaining.length)];
       setInput(randomWord.text);
-      setIsGhostText(true); // Flag to style it differently
+      setIsGhostText(true); 
     }
   };
 
@@ -662,12 +720,12 @@ function RecallGame({ column, onBack }) {
             <div className="text-xs text-slate-500 font-bold uppercase tracking-wider">{column.title}</div>
             <div className="text-xl font-black text-slate-800">{foundCount} / {total} Found</div>
         </div>
-        <div className="w-10"></div> {/* Spacer for center alignment */}
+        <div className="w-10"></div> 
       </div>
 
-      {/* Found Words List (Pushes Upwards) */}
+      {/* Found Words List */}
       <div className="min-h-[200px] mb-8 flex flex-wrap content-start gap-3 p-6 bg-slate-50/50 rounded-3xl border-2 border-dashed border-slate-200">
-         {allRightWords.filter(w => foundIds.has(w.id)).map(word => (
+         {columnFoundWords.map(word => (
            <span key={word.id} className="animate-fade-in bg-purple-100 text-purple-700 px-4 py-2 rounded-full font-bold shadow-sm border border-purple-200 flex items-center gap-2">
              <Check size={14} strokeWidth={3}/> {word.text}
            </span>
@@ -697,12 +755,11 @@ function RecallGame({ column, onBack }) {
             placeholder="Type a word..."
             className={`w-full text-center text-2xl font-bold py-4 px-12 rounded-2xl border-2 shadow-sm focus:outline-none transition-all ${
               isGhostText 
-                ? 'text-slate-400 bg-slate-50 border-slate-200' // Ghost style
+                ? 'text-slate-400 bg-slate-50 border-slate-200' 
                 : 'text-slate-800 bg-white border-slate-200 focus:border-purple-500 focus:ring-4 focus:ring-purple-500/10'
             }`}
           />
           
-          {/* Suggestion Button inside input */}
           <button 
             onClick={handleSuggestion}
             className="absolute right-3 top-1/2 -translate-y-1/2 p-2 text-slate-400 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
@@ -712,6 +769,24 @@ function RecallGame({ column, onBack }) {
           </button>
         </div>
       )}
+
+      {/* Global Guess Input */}
+      <div className="mt-8 pt-6 border-t border-slate-100">
+         <div className="flex items-center gap-2 text-sm font-bold text-slate-400 uppercase mb-2">
+           <Globe size={16} /> Global Guess
+         </div>
+         <input 
+           value={globalInput}
+           onChange={handleGlobalChange}
+           placeholder="Guess a word from ANY category..."
+           className="w-full text-center text-lg py-3 px-6 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-400/10 transition-all placeholder:text-slate-400"
+         />
+         {feedback && (
+           <div className="mt-2 text-center text-emerald-600 font-bold animate-fade-in bg-emerald-50 py-2 rounded-lg border border-emerald-100">
+             {feedback}
+           </div>
+         )}
+      </div>
     </div>
   );
 }
